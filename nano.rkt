@@ -1,5 +1,8 @@
 ;; some prototype for nano pass compilation tool
+;; idea from 
 ;; for racket s-expression like IR
+
+;; TODO
 
 ;; Yihao Sun <ysun67@syr.edu>
 #lang racket
@@ -23,31 +26,33 @@
      (with-syntax ([v (identifier-binding #'id)])
        #''v)]))
 
+
+(define-for-syntax (replace-meta stx-p env)
+  (cond
+    [(identifier? stx-p)
+     (define stx-p-data (syntax->datum stx-p))
+     (cond
+       ;; escape wild card
+       [(equal? stx-p-data '_)
+        #',_]
+       [(hash-has-key? env stx-p-data)
+        #`,(? #,(hash-ref env stx-p-data) #,(generate-temporary stx-p-data))]
+       [else stx-p])]
+    [else
+     (define stx-l (syntax->list stx-p))
+     (datum->syntax stx-p (map (λ (s) (replace-meta s env)) stx-l))]))
+
 ;; define ir should produce a ir with ir?
 (define-syntax (define-ir stx)
   ;; the symbol to mark `Modified`
   (define (mod-symbol? m) (member m '(M ✎)))
   ;; replace syntax by refering a `env` map
-  (define (replace-meta stx-p env)
-    (cond
-      [(identifier? stx-p)
-       (define stx-p-data (syntax->datum stx-p))
-       (cond
-         ;; escape wild card
-         [(equal? stx-p-data '_)
-          #',_]
-         [(hash-has-key? env stx-p-data)
-          #`,(? #,(hash-ref env stx-p-data))]
-         [else stx-p])]
-      [else
-       (define stx-l (syntax->list stx-p))
-       (datum->syntax stx-p (map (λ (s) (replace-meta s env)) stx-l))]))
   (define replaced-stx
     (syntax-case stx ()
       ;; define a new ir
       [(define-ir ir-name
-         (Term (metas tspecs) ...)
-         (Production (enames patss) ...))
+         (terminate (metas tspecs) ...)
+         (production (enames patss) ...))
        ;; using some mutable here, should be careful
        ;; meta map is for extend, pred map is for replacement inside current ir
        (let* ([meta-map (make-hash)]
@@ -109,10 +114,10 @@
                    [else #f])))))]
       ;; extends a exist ir
       [(define-ir ir-name
-         (Extend parent-ir)
-         (Term
+         (extend parent-ir)
+         (terminate
           tchanges ...)
-         (Production
+         (production
           (mods enames echangess) ...))
        (unless (hash-has-key? ir-stx-table (syntax->datum #'parent-ir))
          (raise-syntax-error
@@ -235,18 +240,31 @@
                           [(identifier? (hash-ref meta-map pname))
                            res]
                           [else
-                           (append res (list #`[(? #,p-pred) #t]))]))
+                           (append res (list #`[(? #,p-pred #,(generate-temporary pname)) #t]))]))
                    [else #f])))))]))
   ;; for debug
   (pretty-display (syntax->datum replaced-stx))
   replaced-stx)
 
 
+;; a pass is a conversion from one ir to another
+#;(define-syntax (define-pass stx)
+  (define define-pass-expanded
+    (syntax-case stx ()
+      [(define-pass pass-name
+         (src-ir dst-ir) ;; source ir → destination IR
+         (process
+          (src-rule 
+           transform-function)))]))
+  define-pass-expanded)
+
+;; run pass
+
 ;; test
 (define-ir anf
-  (Term (x symbol?)
+  (terminate (x symbol?)
         (num number?))
-  (Production
+  (production
    (aexp
     ;; →
     (x
@@ -260,10 +278,10 @@
        cexp)))))
 
 (define-ir anf/if
-  (Extend anf)
-  (Term
+  (extend anf)
+  (term
    (+ bool boolean?))
-  (Production
+  (production
    (M aexp
       ((+ bool)))
    (+ if-exp
